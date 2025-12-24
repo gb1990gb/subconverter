@@ -1,138 +1,100 @@
-# ====================== 构建阶段优化 ======================
-FROM alpine:3.16 AS builder
+# 阶段1：基础构建环境（缓存层，仅当alpine版本或build-tools变更时重建）
+FROM alpine:3.16 AS builder-base
 LABEL maintainer="metacubex.official@gmail.com"
+ARG THREADS="4"
+ENV THREADS=${THREADS}
 
-# 构建参数优化：默认线程数自动适配CPU，可覆盖
-ARG THREADS=$(nproc)
-ARG SHA=""
-# 编译优化参数：启用O3优化、LTO链接优化、减小二进制体积
-ARG CFLAGS="-O3 -flto -ffunction-sections -fdata-sections -march=native"
-ARG CXXFLAGS="-O3 -flto -ffunction-sections -fdata-sections -std=c++17 -march=native"
-ARG LDFLAGS="-Wl,--gc-sections -Wl,--strip-all -flto"
-
-# 设置环境变量，确保编译工具链使用优化参数
-ENV CFLAGS=${CFLAGS} \
-    CXXFLAGS=${CXXFLAGS} \
-    LDFLAGS=${LDFLAGS} \
-    MAKEFLAGS="-j ${THREADS}" \
-    TERM=xterm
-
-# 安装依赖并清理缓存，分层安装减少重建
+# 安装基础构建工具（仅安装一次，缓存）
 RUN set -xe && \
-    # 更新源并安装构建依赖，使用国内源加速（可选）
-    sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories && \
-    apk update && \
-    # 构建工具：基础编译环境
     apk add --no-cache --virtual .build-tools \
-        git g++ build-base linux-headers cmake python3 py3-pip ninja && \
-    # 依赖库：开发版
+        git g++ build-base linux-headers cmake python3 && \
     apk add --no-cache --virtual .build-deps \
-        curl-dev rapidjson-dev pcre2-dev yaml-cpp-dev && \
-    # 清理apk缓存，减小层体积
-    rm -rf /var/cache/apk/*
+        curl-dev rapidjson-dev pcre2-dev yaml-cpp-dev
 
-# 构建quickjspp：单独层，利用缓存
+# 阶段2：编译quickjspp（独立层，仅当quickjspp源码变更时重建）
+FROM builder-base AS builder-quickjspp
 WORKDIR /build/quickjspp
 RUN set -xe && \
-    git clone --depth=1 --single-branch https://github.com/ftk/quickjspp . && \
-    git submodule update --init --depth=1 && \
-    # 使用ninja构建加速，启用编译优化
-    cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="${CFLAGS}" -DCMAKE_CXX_FLAGS="${CXXFLAGS}" . && \
-    ninja quickjs && \
-    # 安装到系统目录
-    install -d /usr/lib/quickjs/ && \
-    install -m644 quickjs/libquickjs.a /usr/lib/quickjs/ && \
-    install -d /usr/include/quickjs/ && \
-    install -m644 quickjs/quickjs.h quickjs/quickjs-libc.h /usr/include/quickjs/ && \
-    install -m644 quickjspp.hpp /usr/include && \
-    # 清理构建文件
-    rm -rf /build/quickjspp/*
+    git clone https://github.com/ftk/quickjspp --depth=1 . && \
+    git submodule update --init && \
+    cmake -DCMAKE_BUILD_TYPE=Release . && \
+    make quickjs -j $THREADS && \
+    # 安装到临时目录，便于后续拷贝
+    install -d /install/usr/lib/quickjs/ && \
+    install -m644 quickjs/libquickjs.a /install/usr/lib/quickjs/ && \
+    install -d /install/usr/include/quickjs/ && \
+    install -m644 quickjs/quickjs.h quickjs/quickjs-libc.h /install/usr/include/quickjs/ && \
+    install -m644 quickjspp.hpp /install/usr/include
 
-# 构建libcron：单独层
+# 阶段3：编译libcron（独立层，仅当libcron源码变更时重建）
+FROM builder-base AS builder-libcron
 WORKDIR /build/libcron
 RUN set -xe && \
-    git clone --depth=1 --single-branch https://github.com/PerMalmberg/libcron . && \
-    git submodule update --init --depth=1 && \
-    cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="${CXXFLAGS}" -DCMAKE_EXE_LINKER_FLAGS="${LDFLAGS}" . && \
-    ninja libcron && \
-    install -m644 libcron/out/Release/liblibcron.a /usr/lib/ && \
-    install -d /usr/include/libcron/ && \
-    install -m644 libcron/include/libcron/* /usr/include/libcron/ && \
-    install -d /usr/include/date/ && \
-    install -m644 libcron/externals/date/include/date/* /usr/include/date/ && \
-    rm -rf /build/libcron/*
+    git clone https://github.com/PerMalmberg/libcron --depth=1 . && \
+    git submodule update --init && \
+    cmake -DCMAKE_BUILD_TYPE=Release . && \
+    make libcron -j $THREADS && \
+    # 安装到临时目录
+    install -m644 libcron/out/Release/liblibcron.a /install/usr/lib/ && \
+    install -d /install/usr/include/libcron/ && \
+    install -m644 libcron/include/libcron/* /install/usr/include/libcron/ && \
+    install -d /install/usr/include/date/ && \
+    install -m644 libcron/externals/date/include/date/* /install/usr/include/date/
 
-# 构建toml11：单独层，版本锁定
+# 阶段4：编译toml11（独立层，仅当toml11版本变更时重建）
+FROM builder-base AS builder-toml11
 WORKDIR /build/toml11
 RUN set -xe && \
-    git clone --depth=1 --single-branch --branch="v4.3.0" https://github.com/ToruNiina/toml11 . && \
-    cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=11 -DCMAKE_CXX_FLAGS="${CXXFLAGS}" . && \
-    ninja install && \
-    rm -rf /build/toml11/*
+    git clone https://github.com/ToruNiina/toml11 --branch="v4.3.0" --depth=1 . && \
+    cmake -DCMAKE_CXX_STANDARD=11 . && \
+    make install -j $THREADS DESTDIR=/install
 
-# 构建subconverter：核心构建层
+# 阶段5：编译subconverter（核心层，仅当subconverter源码/SHA变更时重建）
+FROM builder-base AS builder-subconverter
+ARG SHA=""
 WORKDIR /build/subconverter
-RUN set -xe && \
-    git clone --depth=1 --single-branch https://github.com/metacubex/subconverter . && \
-    # 可选：指定SHA版本
-    [ -n "$SHA" ] && sed -i 's/\(v[0-9]\.[0-9]\.[0-9]\)/\1-'"$SHA"'/' src/version.h || true && \
-    # 安装python依赖，使用国内源
-    pip3 install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple gitpython && \
-    # 更新规则
-    python3 scripts/update_rules.py -c scripts/rules_config.conf && \
-    # 构建subconverter，启用所有优化
-    cmake -G Ninja \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_C_FLAGS="${CFLAGS}" \
-        -DCMAKE_CXX_FLAGS="${CXXFLAGS}" \
-        -DCMAKE_EXE_LINKER_FLAGS="${LDFLAGS}" . && \
-    ninja && \
-    # 压缩二进制文件（进一步减小体积）
-    strip --strip-all subconverter && \
-    upx --best --lzma subconverter || true
 
-# ====================== 最终镜像优化 ======================
-FROM alpine:3.16 AS final
+# 先拷贝所有依赖的编译产物（从各独立层拷贝）
+COPY --from=builder-quickjspp /install/ /usr/
+COPY --from=builder-libcron /install/ /usr/
+COPY --from=builder-toml11 /install/ /
+
+# 编译subconverter
+RUN set -xe && \
+    git clone https://github.com/metacubex/subconverter --depth=1 . && \
+    # 处理SHA参数（保持原有逻辑）
+    [ -n "$SHA" ] && sed -i 's/\(v[0-9]\.[0-9]\.[0-9]\)/\1-'"$SHA"'/' src/version.h || true && \
+    # 安装python依赖并更新规则
+    python3 -m ensurepip && \
+    python3 -m pip install gitpython && \
+    python3 scripts/update_rules.py -c scripts/rules_config.conf && \
+    # 编译subconverter
+    cmake -DCMAKE_BUILD_TYPE=Release . && \
+    make -j $THREADS && \
+    # 准备最终产物
+    install -d /install/usr/bin/ && \
+    install -m755 subconverter /install/usr/bin/ && \
+    cp -r base /install/base
+
+# 阶段6：最终镜像（仅拷贝运行时产物，最小化）
+FROM alpine:3.16
 LABEL maintainer="metacubex.official@gmail.com"
 
-# 设置时区，默认UTC（可通过-e TZ=Asia/Shanghai覆盖）
-ARG TZ=UTC
-ENV TZ=${TZ} \
-    # 非root用户运行
-    PUID=1000 \
-    PGID=1000
+# 安装运行时依赖（保持原依赖不变）
+RUN apk add --no-cache --virtual subconverter-deps \
+    pcre2 libcurl yaml-cpp
 
-# 创建非root用户，增强安全性
-RUN set -xe && \
-    # 更新源并安装运行时依赖
-    sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories && \
-    apk update && \
-    apk add --no-cache \
-        pcre2 libcurl yaml-cpp tzdata su-exec upx && \
-    # 创建用户组和用户
-    addgroup -g ${PGID} -S subconverter && \
-    adduser -u ${PUID} -S subconverter -G subconverter -h /base -s /sbin/nologin && \
-    # 设置时区
-    ln -sf /usr/share/zoneinfo/${TZ} /etc/localtime && \
-    echo ${TZ} > /etc/timezone && \
-    # 清理缓存
-    rm -rf /var/cache/apk/*
+# 从编译层拷贝产物（仅运行时需要的文件）
+COPY --from=builder-subconverter /install/usr/bin/subconverter /usr/bin/
+COPY --from=builder-subconverter /install/base /base/
 
-# 从构建阶段复制二进制和配置文件
-COPY --from=builder --chown=subconverter:subconverter /build/subconverter/subconverter /usr/bin/
-COPY --from=builder --chown=subconverter:subconverter /build/subconverter/base /base/
+# 时区设置（保持原有逻辑）
+ENV TZ=Africa/Abidjan
+RUN ln -sf /usr/share/zoneinfo/$TZ /etc/localtime && \
+    echo $TZ > /etc/timezone
 
-# 设置工作目录权限
+# 工作目录和入口（保持原有逻辑）
 WORKDIR /base
-RUN chown -R subconverter:subconverter /base
+CMD ["subconverter"]
 
-# 健康检查：确保服务正常运行
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD wget -q -O - http://127.0.0.1:25500/version || exit 1
-
-# 暴露端口
 EXPOSE 25500/tcp
-
-# 使用非root用户启动，支持PUID/PGID动态调整
-ENTRYPOINT ["/bin/sh", "-c"]
-CMD ["su-exec ${PUID}:${PGID} subconverter"]
