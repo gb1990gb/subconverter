@@ -31,6 +31,7 @@ FROM builder-base AS builder-libcron
 WORKDIR /build/libcron
 RUN set -xe && \
     git clone https://github.com/PerMalmberg/libcron --depth=1 . && \
+    mkdir -p /install/usr/lib && \
     git submodule update --init && \
     cmake -DCMAKE_BUILD_TYPE=Release . && \
     make libcron -j $THREADS && \
