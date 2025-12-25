@@ -57,9 +57,12 @@ COPY --from=toml11-builder /install/ /usr/local/
 WORKDIR /subconverter
 RUN git clone https://github.com/metacubex/subconverter . --depth=1 && \
     [ -n "$SHA" ] && sed -i 's/\(v[0-9]\.[0-9]\.[0-9]\)/\1-'"$SHA"'/' src/version.h || true && \
-    # --- 关键修正：修复 toml11 API 兼容性问题 ---
+    # --- 关键修正：修复 toml11 v3.7+ API 兼容性问题 ---
+    # 1. 移除不再需要的 .location() 调用
+    # 2. 将 serialization_error 替换为 toml::type_error (toml11 v3标准异常)
     sed -i 's/\.location()//g' src/config/binding.h && \
-    # ----------------------------------------
+    sed -i 's/serialization_error/toml::type_error/g' src/config/binding.h && \
+    # -----------------------------------------------
     python3 -m ensurepip && \
     python3 -m pip install --no-cache-dir gitpython && \
     python3 scripts/update_rules.py -c scripts/rules_config.conf && \
