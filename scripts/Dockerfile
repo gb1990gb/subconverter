@@ -33,11 +33,11 @@ RUN git clone https://github.com/PerMalmberg/libcron --depth=1 && \
     install -d /usr/include/date/ && \
     install -m644 libcron/externals/date/include/date/* /usr/include/date/
 
-# --- Stage 4: Build toml11 ---
+# --- Stage 4: Build toml11 (修正版本以适配 subconverter API) ---
 FROM base AS toml11-builder
 WORKDIR /src
-# 依然建议使用 v3.7.1 以保持与 subconverter 代码的最佳兼容性
-RUN git clone https://github.com/ToruNiina/toml11 --branch="v3.7.1" --depth=1 && \
+# subconverter 兼容性最好的是 v3.4.0 或 v3.5.0
+RUN git clone https://github.com/ToruNiina/toml11 --branch="v3.4.0" --depth=1 && \
     cd toml11 && \
     cmake -DCMAKE_INSTALL_PREFIX=/install . && \
     make install
@@ -47,17 +47,12 @@ FROM base AS builder
 ARG THREADS="4"
 ARG SHA=""
 
-# 拷贝依赖
 COPY --from=quickjs-builder /usr/lib/quickjs/ /usr/lib/quickjs/
 COPY --from=quickjs-builder /usr/include/quickjs/ /usr/include/quickjs/
 COPY --from=quickjs-builder /usr/include/quickjspp.hpp /usr/include/
-
 COPY --from=libcron-builder /usr/lib/liblibcron.a /usr/lib/
 COPY --from=libcron-builder /usr/include/libcron/ /usr/include/libcron/
 COPY --from=libcron-builder /usr/include/date/ /usr/include/date/
-
-# 关键修正：完整拷贝 toml11 的安装目录（包含 cmake 配置文件）
-# 这将文件放入 /usr/local/include, /usr/local/lib/cmake 等路径，cmake 能自动找到
 COPY --from=toml11-builder /install/ /usr/local/
 
 WORKDIR /subconverter
@@ -66,7 +61,8 @@ RUN git clone https://github.com/metacubex/subconverter . --depth=1 && \
     python3 -m ensurepip && \
     python3 -m pip install --no-cache-dir gitpython && \
     python3 scripts/update_rules.py -c scripts/rules_config.conf && \
-    cmake -DCMAKE_BUILD_TYPE=Release . && \
+    # 强制让 cmake 寻找我们安装在 /usr/local 的 toml11
+    cmake -DCMAKE_BUILD_TYPE=Release -Dtoml11_DIR=/usr/local/lib/cmake/toml11 . && \
     make -j $THREADS
 
 # --- Stage 6: Runtime Image ---
