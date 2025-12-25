@@ -36,7 +36,7 @@ RUN git clone https://github.com/PerMalmberg/libcron --depth=1 && \
 # --- Stage 4: Build toml11 ---
 FROM base AS toml11-builder
 WORKDIR /src
-# v3.7.1 执行 install 会生成 /usr/local/include/toml.hpp 和 /usr/local/include/toml/ (注意是toml不是toml11)
+# 依然建议使用 v3.7.1 以保持与 subconverter 代码的最佳兼容性
 RUN git clone https://github.com/ToruNiina/toml11 --branch="v3.7.1" --depth=1 && \
     cd toml11 && \
     cmake -DCMAKE_INSTALL_PREFIX=/install . && \
@@ -47,7 +47,7 @@ FROM base AS builder
 ARG THREADS="4"
 ARG SHA=""
 
-# 拷贝依赖 - 确保路径准确
+# 拷贝依赖
 COPY --from=quickjs-builder /usr/lib/quickjs/ /usr/lib/quickjs/
 COPY --from=quickjs-builder /usr/include/quickjs/ /usr/include/quickjs/
 COPY --from=quickjs-builder /usr/include/quickjspp.hpp /usr/include/
@@ -56,8 +56,9 @@ COPY --from=libcron-builder /usr/lib/liblibcron.a /usr/lib/
 COPY --from=libcron-builder /usr/include/libcron/ /usr/include/libcron/
 COPY --from=libcron-builder /usr/include/date/ /usr/include/date/
 
-# 这里的路径现在是 100% 确定的，因为我们在 Stage 4 指定了 /install
-COPY --from=toml11-builder /install/include/ /usr/include/
+# 关键修正：完整拷贝 toml11 的安装目录（包含 cmake 配置文件）
+# 这将文件放入 /usr/local/include, /usr/local/lib/cmake 等路径，cmake 能自动找到
+COPY --from=toml11-builder /install/ /usr/local/
 
 WORKDIR /subconverter
 RUN git clone https://github.com/metacubex/subconverter . --depth=1 && \
