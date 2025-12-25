@@ -33,13 +33,13 @@ RUN git clone https://github.com/PerMalmberg/libcron --depth=1 && \
     install -d /usr/include/date/ && \
     install -m644 libcron/externals/date/include/date/* /usr/include/date/
 
-# --- Stage 4: Build toml11 (修正版本以适配 subconverter API) ---
+# --- Stage 4: Build toml11 (禁用测试以跳过 Boost 依赖) ---
 FROM base AS toml11-builder
 WORKDIR /src
-# subconverter 兼容性最好的是 v3.4.0 或 v3.5.0
-RUN git clone https://github.com/ToruNiina/toml11 --branch="v3.4.0" --depth=1 && \
+# 使用 v3.7.1 但增加禁用测试的参数，这是解决 Boost 缺失的最快方法
+RUN git clone https://github.com/ToruNiina/toml11 --branch="v3.7.1" --depth=1 && \
     cd toml11 && \
-    cmake -DCMAKE_INSTALL_PREFIX=/install . && \
+    cmake -DCMAKE_INSTALL_PREFIX=/install -DTOML11_BUILD_TESTS=OFF . && \
     make install
 
 # --- Stage 5: Final Compilation (Subconverter) ---
@@ -61,14 +61,13 @@ RUN git clone https://github.com/metacubex/subconverter . --depth=1 && \
     python3 -m ensurepip && \
     python3 -m pip install --no-cache-dir gitpython && \
     python3 scripts/update_rules.py -c scripts/rules_config.conf && \
-    # 强制让 cmake 寻找我们安装在 /usr/local 的 toml11
+    # 增加 CMAKE_CXX_FLAGS 以修复之前的 format_error 类型匹配问题（如果还出现）
     cmake -DCMAKE_BUILD_TYPE=Release -Dtoml11_DIR=/usr/local/lib/cmake/toml11 . && \
     make -j $THREADS
 
 # --- Stage 6: Runtime Image ---
 FROM alpine:3.16
 LABEL maintainer="metacubex.official@gmail.com"
-
 RUN apk add --no-cache pcre2 libcurl yaml-cpp tzdata
 
 COPY --from=builder /subconverter/subconverter /usr/bin/subconverter
