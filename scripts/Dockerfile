@@ -33,7 +33,9 @@ RUN set -xe && \
     git clone https://github.com/ToruNiina/toml11 --branch="v4.3.0" --depth=1 && \
     cd toml11 && \
     cmake -DCMAKE_CXX_STANDARD=11 . && \
-    make install -j $THREADS && \
+    make install -j $THREADS 
+    
+RUN set -xe && \
     cd .. && \
     git clone https://github.com/metacubex/subconverter --depth=1 && \
     cd subconverter && \
