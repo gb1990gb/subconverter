@@ -33,29 +33,31 @@ RUN git clone https://github.com/PerMalmberg/libcron --depth=1 && \
     install -d /usr/include/date/ && \
     install -m644 libcron/externals/date/include/date/* /usr/include/date/
 
-# --- Stage 4: toml11 (直接提取头文件) ---
+# --- Stage 4: Build toml11 ---
 FROM base AS toml11-builder
 WORKDIR /src
-# 直接克隆，不需要编译（Header-only）
-RUN git clone https://github.com/ToruNiina/toml11 --branch="v3.7.1" --depth=1
+# v3.7.1 执行 install 会生成 /usr/local/include/toml.hpp 和 /usr/local/include/toml/ (注意是toml不是toml11)
+RUN git clone https://github.com/ToruNiina/toml11 --branch="v3.7.1" --depth=1 && \
+    cd toml11 && \
+    cmake -DCMAKE_INSTALL_PREFIX=/install . && \
+    make install
 
 # --- Stage 5: Final Compilation (Subconverter) ---
 FROM base AS builder
 ARG THREADS="4"
 ARG SHA=""
 
-# 拷贝依赖
+# 拷贝依赖 - 确保路径准确
 COPY --from=quickjs-builder /usr/lib/quickjs/ /usr/lib/quickjs/
 COPY --from=quickjs-builder /usr/include/quickjs/ /usr/include/quickjs/
 COPY --from=quickjs-builder /usr/include/quickjspp.hpp /usr/include/
+
 COPY --from=libcron-builder /usr/lib/liblibcron.a /usr/lib/
 COPY --from=libcron-builder /usr/include/libcron/ /usr/include/libcron/
 COPY --from=libcron-builder /usr/include/date/ /usr/include/date/
 
-# 关键修正：从 toml11 源码目录直接拷贝头文件到 /usr/include
-# v3.7.1 的核心头文件就在其根目录或 toml11 文件夹下
-COPY --from=toml11-builder /src/toml11/toml.hpp /usr/include/
-COPY --from=toml11-builder /src/toml11/toml11 /usr/include/toml11
+# 这里的路径现在是 100% 确定的，因为我们在 Stage 4 指定了 /install
+COPY --from=toml11-builder /install/include/ /usr/include/
 
 WORKDIR /subconverter
 RUN git clone https://github.com/metacubex/subconverter . --depth=1 && \
